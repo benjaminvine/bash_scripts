@@ -1,4 +1,4 @@
-!#/bin/bash
+#!/bin/bash
 
 function configure_fail2ban() {
 
@@ -40,3 +40,5 @@ EOF
     fi
 
 }
+
+configure_fail2ban
