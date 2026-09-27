@@ -1,6 +1,80 @@
 #!/bin/bash
 
-function configure_fail2ban() {
+# Normalize variables and files for clean comparison
+normalize() {
+    grep -vE '^\s*(#|$)' | sed 's/[[:blank:]]\+/ /g' | sort
+}
+
+configure_ssh() {
+
+    # Create sshd config template and path variables
+    local current=""
+    local desired
+    local backup=""
+    local sshd_path="/etc/ssh/sshd_config.d/99-provision.conf"
+    local sshd_config=$(cat <<'EOF'
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin no
+PermitEmptyPassword no
+LoginGraceTime 30
+MaxAuthTries 3
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding no
+ClientAliveInterval 300
+ClientAliveCountMax 2
+PermitUserEnvironment no
+HostbasedAuthentication no
+IgnoreRhosts yes
+EOF
+)
+
+    # Normalize current config if file exists
+    if [[ -f "$sshd_path" ]]; then
+        current=$(normalize < "$sshd_path")
+    fi
+
+    # Normalize desired config variable
+    desired=$(printf '%s\n' "$sshd_config" | normalize)
+
+    # If file doesn't exist or is not correct, then update
+    if [[ ! -f "$sshd_path" || "$current" != "$desired" ]]; then
+
+        # Create backup of config file if exists
+        if [[ -f "$sshd_path" ]]; then
+            backup="/etc/ssh/sshd_config.backup.$(date +%F-%H%M%S)"
+            sudo cp "$sshd_path" "$backup"
+        fi
+
+        # Copy desired config to sshd config
+        printf '%s\n' "$sshd_config" | sudo tee "$sshd_path" >/dev/null
+
+        # Validate sshd config & restart sshd if valid
+        if sudo sshd -t; then
+            if ! sudo systemctl restart sshd; then
+                echo "ERROR: sshd restart failed"
+                return 1
+            fi
+        else
+            echo "ERROR: sshd configuration validation failed"
+
+            # Rollback sshd config file if exists, otherwise remove sshd_path
+            if [[ -n "$backup" && -f "$backup" ]]; then
+                sudo cp "$backup" "$sshd_path"
+                if ! sudo sshd -t; then
+                    echo "ERROR: restored sshd configuration is also invalid"
+                fi
+            else
+                sudo rm -f "$sshd_path"
+            fi
+
+            return 1
+        fi
+    fi
+}
+
+configure_fail2ban() {
 
     # Create jail config template and path variables
     config_changed=false
@@ -42,3 +116,4 @@ EOF
 }
 
 configure_fail2ban
+configure_ssh
