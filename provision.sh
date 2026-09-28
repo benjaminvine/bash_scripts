@@ -120,5 +120,10 @@ EOF
 
 }
 
+configure_firewall() {
+
+}
+
 configure_fail2ban
 configure_ssh
+configure_firewall
