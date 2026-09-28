@@ -13,10 +13,11 @@ configure_ssh() {
     local backup=""
     local sshd_path="/etc/ssh/sshd_config.d/99-provision.conf"
     local sshd_config=$(cat <<'EOF'
+PasswordAuthentication no
 KbdInteractiveAuthentication no
 PubkeyAuthentication yes
 PermitRootLogin no
-PermitEmptyPassword no
+PermitEmptyPasswords no
 LoginGraceTime 30
 MaxAuthTries 3
 X11Forwarding no
@@ -43,8 +44,12 @@ EOF
 
         # Create backup of config file if exists
         if [[ -f "$sshd_path" ]]; then
-            backup="/etc/ssh/sshd_config.backup.$(date +%F-%H%M%S)"
-            sudo cp "$sshd_path" "$backup"
+            backup="/etc/ssh/sshd_config.d/99-provision.backup.$(date +%F-%H%M%S)"
+            if sudo cp -p -- "$sshd_path" "$backup"; then
+            else
+                echo "ERROR: backup failed, aborting before modifying sshd config" >&2
+                exit 1
+            fi
         fi
 
         # Copy desired config to sshd config
@@ -77,9 +82,9 @@ EOF
 configure_fail2ban() {
 
     # Create jail config template and path variables
-    config_changed=false
-    jail_path="/etc/fail2ban/jail.d/sshd.local"
-    jail_config=$(cat <<EOF
+    local config_changed=0
+    local jail_path="/etc/fail2ban/jail.d/sshd.local"
+    local jail_config=$(cat <<EOF
 [sshd]
 enabled = true
 port = ssh
@@ -98,7 +103,7 @@ EOF
     # Check if jail file is present and correct, if not update
     if [[ ! -f "$jail_path" ]] || [[ "$(<"$jail_path")" != "$jail_config" ]]; then
         printf '%s\n' "$jail_config" | sudo tee "$jail_path" >/dev/null
-        config_changed=true
+        config_changed=1
     fi
 
     # Check if fail2ban is enabled, if not enable
@@ -109,7 +114,7 @@ EOF
     # Check if fail2ban is running, if not start
     if ! systemctl is-active --quiet fail2ban; then
         sudo systemctl start fail2ban
-    elif config_changed; then
+    elif [[ config_changed == 1 ]]; then
         sudo systemctl restart fail2ban
     fi
 
