@@ -82,9 +82,12 @@ EOF
 configure_fail2ban() {
 
     # Create jail config template and path variables
-    local config_changed=0
-    local jail_path="/etc/fail2ban/jail.d/sshd.local"
-    local jail_config=$(cat <<EOF
+    local config_changed
+    config_changed=0
+    local jail_path
+    jail_path="/etc/fail2ban/jail.d/sshd.local"
+    local jail_config
+    jail_config=$(cat <<EOF
 [sshd]
 enabled = true
 port = ssh
@@ -114,16 +117,11 @@ EOF
     # Check if fail2ban is running, if not start
     if ! systemctl is-active --quiet fail2ban; then
         sudo systemctl start fail2ban
-    elif [[ config_changed == 1 ]]; then
+    elif [[ "$config_changed" == 1 ]]; then
         sudo systemctl restart fail2ban
     fi
 
 }
 
-configure_firewall() {
-
-}
-
 configure_fail2ban
 configure_ssh
-configure_firewall
