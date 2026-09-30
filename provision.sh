@@ -1,11 +1,13 @@
 #!/bin/bash
 
+set -euo pipefail
+
 # Normalize variables and files for clean comparison
 normalize() {
-    (grep -vE '^\s*(#|$)' || [ "$?" -eq 1]) | sed 's/[[:blank:]]\+/ /g' | sort
+    { grep -vE '^[[:space:]]*(#|$)' || [[ $? -eq 1 ]]; } | sed 's/[[:blank:]]\+/ /g' | sort
 }
 
-# Returns true if file exists, is not empty, or has valid ssh key(s)
+# Returns true if file exists, is non-empty, and has valid ssh key(s)
 has_valid_key() {
     local file=$1
     [[ -s "$file" ]] && ssh-keygen -l -f "$file" &>/dev/null
@@ -14,11 +16,11 @@ has_valid_key() {
 configure_ssh() {
 
     # Create sshd config template and path variables
+    local user
+    user=$(id -un)
     local user_home=""
-    local ssh_path=""
-    local auth_key=""
-    local ssh_perm=""
-    local 
+    local ssh_dir=""
+    local auth_keys=""
     local current=""
     local desired=""
     local backup=""
@@ -44,22 +46,22 @@ EOF
 )
     # VALIDATE AUTH_KEYS
     # Get User Home Dir and authorized_keys path
-    user_home=$(getent passwd "$" | cut -d: -f6)
-    ssh_path="$user_home/.ssh"
-    auth_key="$user_home/.ssh/authorized_keys"
+    user_home=$(getent passwd "$user" | cut -d: -f6)
+    ssh_dir="$user_home/.ssh"
+    auth_keys="$user_home/.ssh/authorized_keys"
 
     # Verify permissions on .ssh
-    if [[ -f "$ssh_path" ]] && ! ls -l "$ssh_path" | grep -q 'drwx------'; then
-        sudo chmod 700 "$ssh_path"
+    if [[ -d "$ssh_dir" && $(stat -c '%a' "$ssh_dir") != 700 ]]; then
+        chmod 700 "$ssh_dir"
     fi
 
     # Verify permission on authorized_keys
-    if [[ -f "$auth_key" ]] && ! ls -l "$auth_keys" | grep -q '-rw-------'; then
-        sudo chmod 600 "$auth_keys"
+    if [[ -f "$auth_keys" && $(stat -c '%a' "$auth_keys") != 600 ]]; then
+        chmod 600 "$auth_keys"
     fi
 
     # If file doesn't exist, is empty, or has invalid ssh key, remove PassAuth no from template var
-    if ! has_valid_key "$auth_key"; then
+    if ! has_valid_key "$auth_keys"; then
         echo "warn: no valid ssh key, leaving PasswordAuthentication unmanaged" >&2
         sshd_config=$(grep -v '^PasswordAuthentication' <<< "$sshd_config")
     fi
@@ -130,7 +132,7 @@ EOF
 )
 
     # Install fail2ban if not already installed
-    if [[ $(dpkg-query -W -f='${Status}' fail2ban2>/dev/null) != 'install ok installed' ]]; then
+    if [[ $(dpkg-query -W -f='${Status}' fail2ban 2>/dev/null) != 'install ok installed' ]]; then
         sudo apt-get install -y fail2ban
     fi
 
@@ -154,5 +156,5 @@ EOF
 
 }
 
-configure_fail2ban
-configure_ssh
+  main() { configure_fail2ban; configure_ssh; }
+  if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi
