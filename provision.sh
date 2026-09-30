@@ -8,11 +8,17 @@ normalize() {
 configure_ssh() {
 
     # Create sshd config template and path variables
-    local current=""
+    local current
+    current=""
     local desired
-    local backup=""
-    local sshd_path="/etc/ssh/sshd_config.d/99-provision.conf"
-    local sshd_config=$(cat <<'EOF'
+    local backup
+    backup=""
+    local auth_key
+    auth_key=""
+    local sshd_path
+    sshd_path="/etc/ssh/sshd_config.d/99-provision.conf"
+    local sshd_config
+    sshd_config=$(cat <<'EOF'
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PubkeyAuthentication yes
