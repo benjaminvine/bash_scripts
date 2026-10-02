@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -euo pipefail
 
@@ -13,17 +13,59 @@ has_valid_key() {
     [[ -s "$file" ]] && ssh-keygen -l -f "$file" &>/dev/null
 }
 
+# Get effective PasswordAuthentication setting
+eff_pass_auth() {
+    sudo sshd -T | awk '$1 == "passwordauthentication" {print $2}'
+}
+
+# Checks for effective PasswordAuthentication setting with expected value
+check_effective() {
+    local expect_no=$1 user=$2 effective
+    effective=$(eff_pass_auth) || {
+        echo "ERROR: could not read effective sshd config" >&2
+        return 1
+    }
+    if (( expect_no )) && [[ "$effective" != 'no' ]]; then
+        echo "ERROR: effective PasswordAuthentication is '$effective', expected 'no'" >&2
+        return 1
+    fi
+    if (( ! expect_no )) && [[ "$effective" == 'no' ]]; then
+        echo "WARN: no valid key for $user but effective PasswordAuthentication is 'no', you may be locked out" >&2
+        return 1
+    fi
+}
+
+# Rollback sshd config if any errors
+rollback_sshd() {
+    local backup=$1 target=$2
+    # Rollback sshd config file if exists, otherwise remove sshd_path
+    if [[ -n "$backup" && -f "$backup" ]]; then
+        if ! sudo cp -p -- "$backup" "$target"; then
+            echo "ERROR: rollback copy failed, sshd config may be inconsistent" >&2
+            return 1
+        fi
+        if ! sudo sshd -t; then
+            echo "ERROR: restored sshd configuration is also invalid" >&2
+            return 1
+        fi
+    else
+        sudo rm -f -- "$target"
+    fi
+}
+
 configure_ssh() {
 
     # Create sshd config template and path variables
     local user
-    user=$(id -un)
+    user=$(id -un $EUID)
     local user_home=""
     local ssh_dir=""
     local auth_keys=""
     local current=""
     local desired=""
     local backup=""
+    local expect_no=1
+    local effective
     local sshd_path="/etc/ssh/sshd_config.d/00-provision.conf"
     local sshd_config
     sshd_config=$(cat <<'EOF'
@@ -44,12 +86,29 @@ HostbasedAuthentication no
 IgnoreRhosts yes
 EOF
 )
+
     # VALIDATE AUTH_KEYS
+    # Check if script was ran by root
+    if (( EUID == 0 )); then
+        echo "ERROR: run as normal user, not root" >&2
+        return 1
+    fi
+
     # Get User Home Dir and authorized_keys path
     user_home=$(getent passwd "$user" | cut -d: -f6)
     ssh_dir="$user_home/.ssh"
     auth_keys="$user_home/.ssh/authorized_keys"
 
+    # Verify Owner of .ssh and authorized_keys
+    local path
+    for path in "$ssh_dir" "$auth_keys"; do
+        [[ -e $path ]] || continue
+        if [[ $(stat -c '%U' "$path") != "$user" ]]; then
+            echo "ERROR: $path is not owned by $user" >&2
+            return 1
+        fi
+    done    
+    
     # Verify permissions on .ssh
     if [[ -d "$ssh_dir" && $(stat -c '%a' "$ssh_dir") != 700 ]]; then
         chmod 700 "$ssh_dir"
@@ -60,10 +119,13 @@ EOF
         chmod 600 "$auth_keys"
     fi
 
+
+
     # If file doesn't exist, is empty, or has invalid ssh key, remove PassAuth no from template var
     if ! has_valid_key "$auth_keys"; then
         echo "warn: no valid ssh key, leaving PasswordAuthentication unmanaged" >&2
         sshd_config=$(grep -v '^PasswordAuthentication' <<< "$sshd_config")
+        expect_no=0
     fi
 
     # VALIDATE OR UPDATE SSHD_CONFIG
@@ -91,24 +153,20 @@ EOF
         printf '%s\n' "$sshd_config" | sudo tee "$sshd_path" >/dev/null
 
         # Validate sshd config & restart sshd if valid
-        if sudo sshd -t; then
-            if ! sudo systemctl restart sshd; then
-                echo "ERROR: sshd restart failed"
-                return 1
+        if ! sudo sshd -t; then
+            echo "ERROR: sshd configuration validation failed, rolling back version" >&2
+            rollback_sshd "$backup" "$sshd_path" || true   #already reported its own error
+            return 1
+        fi
+        if ! check_effective "$expect_no" "$user"; then
+            rollback_sshd "$backup" "$sshd_path" || true
+            return 1
+        fi
+        if ! sudo systemctl restart sshd; then
+            echo "ERROR: sshd restart failed, rolling back version" >&2
+            if rollback_sshd "$backup" "$sshd_path"; then
+                sudo systemctl restart sshd || true
             fi
-        else
-            echo "ERROR: sshd configuration validation failed"
-
-            # Rollback sshd config file if exists, otherwise remove sshd_path
-            if [[ -n "$backup" && -f "$backup" ]]; then
-                sudo cp "$backup" "$sshd_path"
-                if ! sudo sshd -t; then
-                    echo "ERROR: restored sshd configuration is also invalid"
-                fi
-            else
-                sudo rm -f "$sshd_path"
-            fi
-
             return 1
         fi
     fi
@@ -156,5 +214,5 @@ EOF
 
 }
 
-  main() { configure_fail2ban; configure_ssh; }
-  if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi
+main() { configure_fail2ban; configure_ssh; }
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi
